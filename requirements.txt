@@ -1,0 +1,14 @@
+obspy
+numpy
+scipy
+matplotlib
+lxml
+sqlalchemy
+decorator
+requests
+packaging
+pyproj
+pytest
+geographiclib
+cartopy
+pyshp
