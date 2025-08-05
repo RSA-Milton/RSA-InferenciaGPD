@@ -2,8 +2,7 @@
 """
 GUI para selección y visualización de eventos de un archivo miniSEED,
 con resampleo a 100 Hz, selección de canal, y hora de inicio basada en metadata.
-Además muestra rango completo de tiempos del archivo y permite desplazar el inicio,
-soporta entrada de hora con milisegundos.
+Además muestra rango completo de tiempos del archivo y permite desplazar el inicio en segundos.
 """
 import os
 import sys
@@ -24,9 +23,8 @@ if not PROJECT_LOCAL_ROOT:
     print("ERROR: PROJECT_LOCAL_ROOT no definido en .env")
     sys.exit(1)
 
-# --- Stream resampleado global ---
+# --- Stream resampleado global y timestamp inicial ---
 resampled_stream = None
-# Timestamp de inicio original del archivo
 file_starttime = None
 
 # --- Cierre seguro ---
@@ -81,18 +79,17 @@ def previsualizar():
             micro = int(ms) * 1000
             hora_dt = dt_time(t.hour, t.minute, t.second, micro)
         else:
-            t = datetime.strptime(raw_hora, '%H:%M:%S').time()
-            hora_dt = t
+            hora_dt = datetime.strptime(raw_hora, '%H:%M:%S').time()
     except Exception:
         messagebox.showerror("Error", "Formato de hora inicio inválido. Use hh:mm:ss o hh:mm:ss,ms")
         return
     try:
         dur = float(spin_duracion.get())
-        shift_ms = int(entry_shift.get())
+        shift_sec = float(entry_shift.get())
     except ValueError:
         messagebox.showerror("Error", "Duración o desplazamiento no válidos.")
         return
-    shift_delta = timedelta(milliseconds=shift_ms)
+    shift_delta = timedelta(seconds=shift_sec)
     canal = channel_var.get()
 
     try:
@@ -112,8 +109,7 @@ def previsualizar():
         return
 
     # Actualizar hora inicio y reset desplazamiento
-    new_time = full_dt
-    new_str = new_time.strftime('%H:%M:%S') + f",{int(new_time.microsecond/1000):03d}"
+    new_str = full_dt.strftime('%H:%M:%S') + f",{int(full_dt.microsecond/1000):03d}"
     entry_hora.delete(0, tk.END)
     entry_hora.insert(0, new_str)
     entry_shift.delete(0, tk.END)
@@ -173,7 +169,7 @@ tk.Label(frame_param, text="Duración (s):").grid(row=0, column=2, padx=5, stick
 spin_duracion = tk.Spinbox(frame_param, from_=0.1, to=600, increment=0.1, width=6)
 spin_duracion.grid(row=0, column=3, padx=5)
 
-tk.Label(frame_param, text="Desplazamiento (ms):").grid(row=1, column=0, padx=5, sticky="e")
+tk.Label(frame_param, text="Desplazamiento (s):").grid(row=1, column=0, padx=5, sticky="e")
 entry_shift = tk.Entry(frame_param, width=6)
 entry_shift.insert(0, "0")
 entry_shift.grid(row=1, column=1, padx=5, sticky="w")
