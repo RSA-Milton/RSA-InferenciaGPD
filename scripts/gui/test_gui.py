@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 GUI para selección y visualización de eventos de un archivo miniSEED,
-con resampleo a 100 Hz, selección de canal, y hora de inicio basada en metadata.
-Además muestra rango completo de tiempos del archivo y permite desplazar el inicio en segundos.
+con resampleo a 100 Hz, selección de canal, hora de inicio basada en metadata,
+rango completo de tiempos, desplazamiento en segundos, y lectura de posición del mouse.
 """
 import os
 import sys
@@ -23,15 +23,25 @@ if not PROJECT_LOCAL_ROOT:
     print("ERROR: PROJECT_LOCAL_ROOT no definido en .env")
     sys.exit(1)
 
-# --- Stream resampleado global y timestamp inicial ---
+# --- Variables globales ---
 resampled_stream = None
 file_starttime = None
+fig, ax = None, None
+canvas = None
 
 # --- Cierre seguro ---
 def cerrar():
     ventana.quit()
     ventana.destroy()
     sys.exit(0)
+
+# --- Funcción de movimiento del mouse ---
+def on_mouse_move(event):
+    if event.inaxes and event.xdata is not None:
+        x = event.xdata
+        lbl_pos.config(text=f"Posición: {x:.3f} s")
+    else:
+        lbl_pos.config(text="Posición: --")
 
 # --- Abrir archivo y cargar metadata ---
 def abrir_archivo():
@@ -66,7 +76,7 @@ def abrir_archivo():
 
 # --- Previsualizar evento seleccionado ---
 def previsualizar():
-    global resampled_stream, file_starttime
+    global resampled_stream, file_starttime, fig, ax, canvas
     if resampled_stream is None:
         messagebox.showwarning("Aviso", "Primero abre un archivo mseed.")
         return
@@ -115,9 +125,11 @@ def previsualizar():
     entry_shift.delete(0, tk.END)
     entry_shift.insert(0, "0")
 
+    # Limpiar área de gráfico
     for w in frame_plot.winfo_children():
         w.destroy()
 
+    # Graficar traza
     fig, ax = plt.subplots(figsize=(6,3))
     for tr in segment:
         times = tr.times()
@@ -134,8 +146,10 @@ def previsualizar():
     ax.set_xlim(0, dur)
     ax.legend(loc='upper right', fontsize='small')
 
+    # Incrustar canvas y conectar evento de mouse
     canvas = FigureCanvasTkAgg(fig, master=frame_plot)
     canvas.get_tk_widget().pack(fill="both", expand=True)
+    canvas.mpl_connect('motion_notify_event', on_mouse_move)
     canvas.draw()
 
 # --- Configurar ventana ---
@@ -144,9 +158,11 @@ ventana.title("Extracción de Eventos - GPD")
 ventana.geometry("800x600")
 ventana.protocol("WM_DELETE_WINDOW", cerrar)
 
-# Frame archivo
+# --- Frame archivo ---
 frame_file = tk.Frame(ventana)
 frame_file.pack(fill="x", pady=5)
+
+import tkinter as _tk
 
 tk.Label(frame_file, text="Archivo mseed:").pack(side="left", padx=5)
 entry_archivo = tk.Entry(frame_file, width=50)
@@ -157,7 +173,7 @@ btn_abrir.pack(side="left", padx=5)
 lbl_fecha = tk.Label(frame_file, text="Fecha: --   Inicio: --   Fin: --")
 lbl_fecha.pack(side="left", padx=10)
 
-# Frame parámetros
+# --- Frame parámetros ---
 frame_param = tk.Frame(ventana)
 frame_param.pack(fill="x", pady=5)
 
@@ -179,7 +195,7 @@ channel_var = tk.StringVar(value="ENT")
 drop_channel = tk.OptionMenu(frame_param, channel_var, "ENT", "ENR", "ENV")
 drop_channel.grid(row=1, column=3, padx=5, sticky="w")
 
-# Frame acciones
+# --- Frame acciones ---
 frame_actions = tk.Frame(ventana)
 frame_actions.pack(pady=10)
 btn_previsualizar = tk.Button(frame_actions, text="Previsualizar", command=previsualizar)
@@ -188,8 +204,10 @@ btn_salir = tk.Button(frame_actions, text="Salir", command=cerrar, fg="white", b
 btn_salir.pack(side="left", padx=10)
 lbl_centro = tk.Label(frame_actions, text="Centro: --")
 lbl_centro.pack(side="left", padx=10)
+lbl_pos = tk.Label(frame_actions, text="Posición: --")
+lbl_pos.pack(side="left", padx=10)
 
-# Frame plot
+# --- Frame plot ---
 frame_plot = tk.Frame(ventana)
 frame_plot.pack(fill="both", expand=True, pady=5)
 
