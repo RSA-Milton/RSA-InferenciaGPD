@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 GUI para selección y visualización de eventos de un archivo miniSEED,
-con selección de canal y hora de inicio basada en metadata.
+con resampleo a 100 Hz, selección de canal, y hora de inicio basada en metadata.
+Además muestra rango completo de tiempos del archivo y permite desplazar el inicio,
+soporta entrada de hora con milisegundos.
 """
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, time as dt_time
 from dotenv import load_dotenv, find_dotenv
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -22,55 +24,84 @@ if not PROJECT_LOCAL_ROOT:
     print("ERROR: PROJECT_LOCAL_ROOT no definido en .env")
     sys.exit(1)
 
-# --- Función de cierre seguro ---
+# --- Stream resampleado global ---
+resampled_stream = None
+# Timestamp de inicio original del archivo
+file_starttime = None
+
+# --- Cierre seguro ---
 def cerrar():
     ventana.quit()
     ventana.destroy()
     sys.exit(0)
 
-# --- Función Abrir archivo ---
+# --- Abrir archivo y cargar metadata ---
 def abrir_archivo():
+    global resampled_stream, file_starttime
     fn = filedialog.askopenfilename(
         title="Selecciona un mseed",
         initialdir=os.path.join(PROJECT_LOCAL_ROOT, "resultados", "mseed"),
         filetypes=[("MiniSEED","*.mseed"),("Todos","*.*")]
     )
-    if fn:
-        entry_archivo.delete(0, tk.END)
-        entry_archivo.insert(0, fn)
-        # Obtener fecha de metadata
-        try:
-            s = read(fn)
-            date = s[0].stats.starttime.date
-            entry_hora.delete(0, tk.END)
-            entry_hora.insert(0, "00:00:00")
-            lbl_fecha.config(text=f"Fecha: {date}")
-        except:
-            lbl_fecha.config(text="Fecha: desconocida")
+    if not fn:
+        return
+    entry_archivo.delete(0, tk.END)
+    entry_archivo.insert(0, fn)
+    try:
+        s = read(fn)
+        s.resample(100.0)
+        resampled_stream = s
+        st = s[0].stats.starttime
+        et = s[0].stats.endtime
+        file_starttime = st
+        date = st.date
+        start_str = st.datetime.strftime('%H:%M:%S')
+        end_str = et.datetime.strftime('%H:%M:%S')
+        lbl_fecha.config(text=f"Fecha: {date}   Inicio: {start_str}   Fin: {end_str}")
+        entry_hora.delete(0, tk.END)
+        entry_hora.insert(0, start_str)
+        entry_shift.delete(0, tk.END)
+        entry_shift.insert(0, "0")
+    except Exception as e:
+        messagebox.showerror("Error apertura", str(e))
+        resampled_stream = None
 
-# --- Función Previsualizar evento ---
+# --- Previsualizar evento seleccionado ---
 def previsualizar():
-    archivo = entry_archivo.get()
-    hora_str = entry_hora.get()
-    dur = float(spin_duracion.get())
-    shift_ms = int(entry_shift.get())
-    shift = shift_ms / 1000.0
+    global resampled_stream, file_starttime
+    if resampled_stream is None:
+        messagebox.showwarning("Aviso", "Primero abre un archivo mseed.")
+        return
+    raw_hora = entry_hora.get()
+    # Parse hora con opcional milisegundos
+    try:
+        if ',' in raw_hora:
+            main, ms = raw_hora.split(',')
+            t = datetime.strptime(main, '%H:%M:%S').time()
+            micro = int(ms) * 1000
+            hora_dt = dt_time(t.hour, t.minute, t.second, micro)
+        else:
+            t = datetime.strptime(raw_hora, '%H:%M:%S').time()
+            hora_dt = t
+    except Exception:
+        messagebox.showerror("Error", "Formato de hora inicio inválido. Use hh:mm:ss o hh:mm:ss,ms")
+        return
+    try:
+        dur = float(spin_duracion.get())
+        shift_ms = int(entry_shift.get())
+    except ValueError:
+        messagebox.showerror("Error", "Duración o desplazamiento no válidos.")
+        return
+    shift_delta = timedelta(milliseconds=shift_ms)
     canal = channel_var.get()
 
-    if not os.path.isfile(archivo):
-        messagebox.showerror("Error", f"Archivo no encontrado:\n{archivo}")
-        return
-
     try:
-        stream = read(archivo)
-        # Fecha de metadata
-        date = stream[0].stats.starttime.date
-        # Construir timestamp completo
-        full_ts = f"{date.isoformat()}T{hora_str}"
-        t0 = UTCDateTime(full_ts) + shift
+        date = file_starttime.date
+        base_dt = datetime.combine(date, hora_dt)
+        full_dt = base_dt + shift_delta
+        t0 = UTCDateTime(full_dt)
         t1 = t0 + dur
-        segment = stream.slice(starttime=t0, endtime=t1)
-        # Filtrar canal
+        segment = resampled_stream.slice(starttime=t0, endtime=t1)
         segment = segment.select(channel=canal)
     except Exception as e:
         messagebox.showerror("Error lectura/recorte", str(e))
@@ -80,34 +111,44 @@ def previsualizar():
         messagebox.showwarning("Sin datos", "No hay datos en el intervalo especificado.")
         return
 
-    # limpiar área de plot
-    for widget in frame_plot.winfo_children():
-        widget.destroy()
+    # Actualizar hora inicio y reset desplazamiento
+    new_time = full_dt
+    new_str = new_time.strftime('%H:%M:%S') + f",{int(new_time.microsecond/1000):03d}"
+    entry_hora.delete(0, tk.END)
+    entry_hora.insert(0, new_str)
+    entry_shift.delete(0, tk.END)
+    entry_shift.insert(0, "0")
 
-    # graficar
+    for w in frame_plot.winfo_children():
+        w.destroy()
+
     fig, ax = plt.subplots(figsize=(6,3))
     for tr in segment:
-        times = tr.times()  # segundos relativos
+        times = tr.times()
         ax.plot(times, tr.data, label=tr.stats.channel)
-    # línea central
     center = dur / 2
     ax.axvline(center, color='r')
-    ax.set_title(os.path.basename(archivo))
+    center_time = t0 + center
+    dtc = center_time.datetime
+    centro_str = dtc.strftime('%H:%M:%S') + f",{int(dtc.microsecond/1000):03d}"
+    lbl_centro.config(text=f"Centro: {centro_str}")
+    ax.set_title(os.path.basename(entry_archivo.get()))
     ax.set_xlabel('Tiempo (s)')
     ax.set_ylabel('Amplitud')
+    ax.set_xlim(0, dur)
     ax.legend(loc='upper right', fontsize='small')
 
     canvas = FigureCanvasTkAgg(fig, master=frame_plot)
     canvas.get_tk_widget().pack(fill="both", expand=True)
     canvas.draw()
 
-# --- Crear ventana principal ---
+# --- Configurar ventana ---
 ventana = tk.Tk()
 ventana.title("Extracción de Eventos - GPD")
 ventana.geometry("800x600")
 ventana.protocol("WM_DELETE_WINDOW", cerrar)
 
-# --- Frame de selección de archivo ---
+# Frame archivo
 frame_file = tk.Frame(ventana)
 frame_file.pack(fill="x", pady=5)
 
@@ -117,45 +158,43 @@ entry_archivo.pack(side="left", padx=5)
 btn_abrir = tk.Button(frame_file, text="Abrir…", command=abrir_archivo)
 btn_abrir.pack(side="left", padx=5)
 
-lbl_fecha = tk.Label(frame_file, text="Fecha: --")
+lbl_fecha = tk.Label(frame_file, text="Fecha: --   Inicio: --   Fin: --")
 lbl_fecha.pack(side="left", padx=10)
 
-# --- Frame de parámetros de evento ---
+# Frame parámetros
 frame_param = tk.Frame(ventana)
 frame_param.pack(fill="x", pady=5)
 
 tk.Label(frame_param, text="Hora inicio (hh:mm:ss):").grid(row=0, column=0, padx=5, sticky="e")
-entry_hora = tk.Entry(frame_param, width=10)
+entry_hora = tk.Entry(frame_param, width=14)
 entry_hora.grid(row=0, column=1, padx=5)
 
-# Duración (s)
 tk.Label(frame_param, text="Duración (s):").grid(row=0, column=2, padx=5, sticky="e")
 spin_duracion = tk.Spinbox(frame_param, from_=0.1, to=600, increment=0.1, width=6)
 spin_duracion.grid(row=0, column=3, padx=5)
 
-# Desplazamiento (ms)
 tk.Label(frame_param, text="Desplazamiento (ms):").grid(row=1, column=0, padx=5, sticky="e")
 entry_shift = tk.Entry(frame_param, width=6)
 entry_shift.insert(0, "0")
 entry_shift.grid(row=1, column=1, padx=5, sticky="w")
 
-# Canal a visualizar
 tk.Label(frame_param, text="Canal:").grid(row=1, column=2, padx=5, sticky="e")
 channel_var = tk.StringVar(value="ENT")
 drop_channel = tk.OptionMenu(frame_param, channel_var, "ENT", "ENR", "ENV")
 drop_channel.grid(row=1, column=3, padx=5, sticky="w")
 
-# --- Frame de acciones ---
+# Frame acciones
 frame_actions = tk.Frame(ventana)
 frame_actions.pack(pady=10)
 btn_previsualizar = tk.Button(frame_actions, text="Previsualizar", command=previsualizar)
 btn_previsualizar.pack(side="left", padx=10)
 btn_salir = tk.Button(frame_actions, text="Salir", command=cerrar, fg="white", bg="red")
 btn_salir.pack(side="left", padx=10)
+lbl_centro = tk.Label(frame_actions, text="Centro: --")
+lbl_centro.pack(side="left", padx=10)
 
-# --- Frame para plot ---
+# Frame plot
 frame_plot = tk.Frame(ventana)
 frame_plot.pack(fill="both", expand=True, pady=5)
 
-# --- Iniciar bucle de la GUI ---
 ventana.mainloop()
