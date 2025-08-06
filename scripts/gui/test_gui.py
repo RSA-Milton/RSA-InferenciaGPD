@@ -52,7 +52,7 @@ def on_click(event):
     dur = float(spin_duracion.get()); center = dur / 2.0
     delta = x_click - center
     entry_shift.delete(0, tk.END)
-    entry_shift.insert(0, f"{delta:.3f}")
+    entry_shift.insert(0, f"{delta:.2f}")
     toggle_centrar()
 
 # Movimiento del mouse: mostrar Δ en modo centrar o posición
@@ -60,9 +60,9 @@ def on_mouse_move(event):
     if centrar_mode and event.inaxes and event.xdata is not None:
         dur = float(spin_duracion.get()); center = dur / 2.0
         delta = event.xdata - center
-        lbl_pos.config(text=f"Δ: {delta:+.3f} s")
+        lbl_pos.config(text=f"Δ: {delta:+.2f} s")
     elif event.inaxes and event.xdata is not None:
-        lbl_pos.config(text=f"Posición: {event.xdata:.3f} s")
+        lbl_pos.config(text=f"Posición: {event.xdata:.2f} s")
     else:
         lbl_pos.config(text="Posición: --")
 
@@ -115,7 +115,7 @@ def previsualizar():
     if not segment:
         messagebox.showwarning("Sin datos", "No hay datos en el intervalo especificado."); return
     # Actualizar entrada hora con ms preservados
-    new_str = base_dt.strftime('%H:%M:%S') + f",{int(base_dt.microsecond/1000):03d}"
+    new_str = base_dt.strftime('%H:%M:%S') + f",{int(base_dt.microsecond/1000):02d}"
     entry_hora.delete(0, tk.END); entry_hora.insert(0, new_str)
     entry_shift.delete(0, tk.END); entry_shift.insert(0, "0")
     # Desactivar modo centrar
@@ -126,7 +126,7 @@ def previsualizar():
     for tr in segment: ax.plot(tr.times(), tr.data, label=tr.stats.channel)
     center = dur / 2.0; ax.axvline(center, color='r')
     dtc = (t0 + center).datetime
-    lbl_centro.config(text=f"Centro: {dtc.strftime('%H:%M:%S')},{int(dtc.microsecond/1000):03d}")
+    lbl_centro.config(text=f"Centro: {dtc.strftime('%H:%M:%S')},{int(dtc.microsecond/1000):02d}")
     ax.set_xlabel('Tiempo (s)'); ax.set_ylabel('Amplitud'); ax.set_title(os.path.basename(entry_archivo.get()))
     ax.set_xlim(0, dur); ax.legend(loc='upper right', fontsize='small')
     canvas = FigureCanvasTkAgg(fig, master=frame_plot)
