@@ -3,7 +3,7 @@
 GUI para selección y visualización de eventos de un archivo miniSEED,
 con resampleo a 100 Hz, selección de canal, hora de inicio basada en metadata,
 rango completo de tiempos, desplazamiento en segundos, lectura de posición del mouse,
-funcionalidad centrado de evento sin línea auxiliar.
+funcionalidad centrado de evento sin línea auxiliar, preservando ms cuando desplazamiento = 0.
 """
 import os
 import sys
@@ -30,7 +30,7 @@ file_starttime = None
 fig, ax, canvas = None, None, None
 centrar_mode = False
 
-# --- Funciones de la GUI ---
+# --- Funciones comunes ---
 def cerrar():
     ventana.quit(); ventana.destroy(); sys.exit(0)
 
@@ -44,21 +44,21 @@ def toggle_centrar():
         btn_centrar.config(relief=tk.RAISED, text='Centrar: OFF')
         lbl_pos.config(text='Posición: --')
 
-# Evento clic para centrar un punto (sin dibujar línea)
+# Evento clic: calcular Δ y asignar a desplazamiento
 def on_click(event):
     if not centrar_mode or event.inaxes is None:
         return
     x_click = event.xdata
-    dur = float(spin_duracion.get()); center = dur/2.0
+    dur = float(spin_duracion.get()); center = dur / 2.0
     delta = x_click - center
     entry_shift.delete(0, tk.END)
     entry_shift.insert(0, f"{delta:.3f}")
     toggle_centrar()
 
-# Movimiento del mouse: mostrar delta o posición
+# Movimiento del mouse: mostrar Δ en modo centrar o posición
 def on_mouse_move(event):
     if centrar_mode and event.inaxes and event.xdata is not None:
-        dur = float(spin_duracion.get()); center = dur/2.0
+        dur = float(spin_duracion.get()); center = dur / 2.0
         delta = event.xdata - center
         lbl_pos.config(text=f"Δ: {delta:+.3f} s")
     elif event.inaxes and event.xdata is not None:
@@ -74,7 +74,8 @@ def abrir_archivo():
         initialdir=os.path.join(PROJECT_LOCAL_ROOT, "resultados", "mseed"),
         filetypes=[("MiniSEED","*.mseed"),("Todos","*.*")]
     )
-    if not fn: return
+    if not fn:
+        return
     entry_archivo.delete(0, tk.END); entry_archivo.insert(0, fn)
     try:
         s = read(fn); s.resample(100.0); resampled_stream = s
@@ -91,9 +92,17 @@ def previsualizar():
     global fig, ax, canvas, centrar_mode
     if resampled_stream is None:
         messagebox.showwarning("Aviso", "Primero abre un archivo mseed."); return
-    raw_hora = entry_hora.get().split(',')[0]
-    try: hora_dt = datetime.strptime(raw_hora, '%H:%M:%S').time()
-    except: messagebox.showerror("Error", "Formato de hora inicio inválido."); return
+    # Obtener hora inicio con ms opcionales
+    raw = entry_hora.get()
+    try:
+        if ',' in raw:
+            main, ms = raw.split(',')
+            t = datetime.strptime(main, '%H:%M:%S').time()
+            hora_dt = dt_time(t.hour, t.minute, t.second, int(ms) * 1000)
+        else:
+            hora_dt = datetime.strptime(raw, '%H:%M:%S').time()
+    except Exception:
+        messagebox.showerror("Error", "Formato de hora inicio inválido."); return
     try:
         dur = float(spin_duracion.get()); shift_sec = float(entry_shift.get())
     except ValueError:
@@ -104,17 +113,18 @@ def previsualizar():
     t0 = UTCDateTime(base_dt); t1 = t0 + dur
     segment = resampled_stream.slice(starttime=t0, endtime=t1).select(channel=canal)
     if not segment:
-        messagebox.showwarning("Sin datos","No hay datos en el intervalo especificado."); return
-    # actualizar hora inicio y reset desplazamiento
+        messagebox.showwarning("Sin datos", "No hay datos en el intervalo especificado."); return
+    # Actualizar entrada hora con ms preservados
     new_str = base_dt.strftime('%H:%M:%S') + f",{int(base_dt.microsecond/1000):03d}"
     entry_hora.delete(0, tk.END); entry_hora.insert(0, new_str)
     entry_shift.delete(0, tk.END); entry_shift.insert(0, "0")
+    # Desactivar modo centrar
     centrar_mode = False; btn_centrar.config(relief=tk.RAISED, text='Centrar: OFF'); lbl_pos.config(text='Posición: --')
-    # limpiar gráfico anterior
+    # Limpiar gráfico previo
     for w in frame_plot.winfo_children(): w.destroy()
     fig, ax = plt.subplots(figsize=(6,3))
     for tr in segment: ax.plot(tr.times(), tr.data, label=tr.stats.channel)
-    center = dur/2.0; ax.axvline(center, color='r')
+    center = dur / 2.0; ax.axvline(center, color='r')
     dtc = (t0 + center).datetime
     lbl_centro.config(text=f"Centro: {dtc.strftime('%H:%M:%S')},{int(dtc.microsecond/1000):03d}")
     ax.set_xlabel('Tiempo (s)'); ax.set_ylabel('Amplitud'); ax.set_title(os.path.basename(entry_archivo.get()))
@@ -125,32 +135,31 @@ def previsualizar():
     canvas.mpl_connect('button_press_event', on_click)
     canvas.draw()
 
-# --- Configuración de la ventana ---
+# --- Configuración ventana ---
 ventana = tk.Tk(); ventana.title("Extracción de Eventos - GPD"); ventana.geometry("800x600"); ventana.protocol("WM_DELETE_WINDOW", cerrar)
 # Frame archivo
 frame_file = tk.Frame(ventana); frame_file.pack(fill='x', pady=5)
-# Widgets selección de archivo
-tk.Label(frame_file,text="Archivo mseed:").pack(side='left',padx=5)
-entry_archivo=tk.Entry(frame_file,width=50); entry_archivo.pack(side='left',padx=5)
-btn_abrir=tk.Button(frame_file,text="Abrir…",command=abrir_archivo); btn_abrir.pack(side='left',padx=5)
-lbl_fecha=tk.Label(frame_file,text="Fecha: --   Inicio: --   Fin: --"); lbl_fecha.pack(side='left',padx=10)
+tk.Label(frame_file, text="Archivo mseed:").pack(side='left', padx=5)
+entry_archivo = tk.Entry(frame_file, width=50); entry_archivo.pack(side='left', padx=5)
+btn_abrir = tk.Button(frame_file, text="Abrir…", command=abrir_archivo); btn_abrir.pack(side='left', padx=5)
+lbl_fecha = tk.Label(frame_file, text="Fecha: --   Inicio: --   Fin: --"); lbl_fecha.pack(side='left', padx=10)
 # Frame parámetros
-frame_param=tk.Frame(ventana); frame_param.pack(fill='x',pady=5)
-tk.Label(frame_param,text="Hora inicio (hh:mm:ss):").grid(row=0,column=0,padx=5,sticky='e')
-entry_hora=tk.Entry(frame_param,width=14); entry_hora.grid(row=0,column=1,padx=5)
-tk.Label(frame_param,text="Duración (s):").grid(row=0,column=2,padx=5,sticky='e')
-spin_duracion=tk.Spinbox(frame_param,from_=0.1,to=600,increment=0.1,width=6); spin_duracion.grid(row=0,column=3,padx=5)
-tk.Label(frame_param,text="Desplazamiento (s):").grid(row=1,column=0,padx=5,sticky='e')
-entry_shift=tk.Entry(frame_param,width=6); entry_shift.insert(0,"0"); entry_shift.grid(row=1,column=1,padx=5,sticky='w')
-tk.Label(frame_param,text="Canal:").grid(row=1,column=2,padx=5,sticky='e')
-channel_var=tk.StringVar(value="ENT"); tk.OptionMenu(frame_param,channel_var,"ENT","ENR","ENV").grid(row=1,column=3,padx=5,sticky='w')
+frame_param = tk.Frame(ventana); frame_param.pack(fill='x', pady=5)
+tk.Label(frame_param, text="Hora inicio (hh:mm:ss):").grid(row=0, column=0, padx=5, sticky='e')
+entry_hora = tk.Entry(frame_param, width=14); entry_hora.grid(row=0, column=1, padx=5)
+tk.Label(frame_param, text="Duración (s):").grid(row=0, column=2, padx=5, sticky='e')
+spin_duracion = tk.Spinbox(frame_param, from_=0.1, to=600, increment=0.1, width=6); spin_duracion.grid(row=0, column=3, padx=5)
+tk.Label(frame_param, text="Desplazamiento (s):").grid(row=1, column=0, padx=5, sticky='e')
+entry_shift = tk.Entry(frame_param, width=6); entry_shift.insert(0, "0"); entry_shift.grid(row=1, column=1, padx=5, sticky='w')
+tk.Label(frame_param, text="Canal:").grid(row=1, column=2, padx=5, sticky='e')
+channel_var = tk.StringVar(value="ENT"); tk.OptionMenu(frame_param, channel_var, "ENT", "ENR", "ENV").grid(row=1, column=3, padx=5, sticky='w')
 # Frame acciones
-frame_actions=tk.Frame(ventana); frame_actions.pack(pady=10)
-btn_previsualizar=tk.Button(frame_actions,text="Previsualizar",command=previsualizar); btn_previsualizar.pack(side='left',padx=10)
-btn_centrar=tk.Button(frame_actions,text="Centrar: OFF",command=toggle_centrar); btn_centrar.pack(side='left',padx=10)
-btn_salir=tk.Button(frame_actions,text="Salir",command=cerrar,fg='white',bg='red'); btn_salir.pack(side='left',padx=10)
-lbl_centro=tk.Label(frame_actions,text="Centro: --"); lbl_centro.pack(side='left',padx=10)
-lbl_pos=tk.Label(frame_actions,text="Posición: --"); lbl_pos.pack(side='left',padx=10)
+frame_actions = tk.Frame(ventana); frame_actions.pack(pady=10)
+btn_previsualizar = tk.Button(frame_actions, text="Previsualizar", command=previsualizar); btn_previsualizar.pack(side='left', padx=10)
+btn_centrar = tk.Button(frame_actions, text="Centrar: OFF", command=toggle_centrar); btn_centrar.pack(side='left', padx=10)
+btn_salir = tk.Button(frame_actions, text="Salir", command=cerrar, fg='white', bg='red'); btn_salir.pack(side='left', padx=10)
+lbl_centro = tk.Label(frame_actions, text="Centro: --"); lbl_centro.pack(side='left', padx=10)
+lbl_pos = tk.Label(frame_actions, text="Posición: --"); lbl_pos.pack(side='left', padx=10)
 # Frame plot
-frame_plot=tk.Frame(ventana); frame_plot.pack(fill='both',expand=True,pady=5)
+frame_plot = tk.Frame(ventana); frame_plot.pack(fill='both', expand=True, pady=5)
 ventana.mainloop()
