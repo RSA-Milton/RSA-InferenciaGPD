@@ -171,6 +171,61 @@ class CenteringMode:
             self.position_label.config(text='Posición: --')
 
 
+class KeepCenterMode:
+    """Maneja el modo de mantener centro fijo al cambiar duración."""
+    
+    def __init__(self, button, time_handler):
+        self.is_active = False
+        self.button = button
+        self.time_handler = time_handler
+        self.last_center_time = None  # Guarda el tiempo del último centro calculado
+        self.last_base_date = None    # Guarda la fecha base del archivo
+    
+    def toggle(self):
+        """Alterna el modo mantener centro."""
+        self.is_active = not self.is_active
+        self._update_ui()
+    
+    def deactivate(self):
+        """Desactiva el modo mantener centro."""
+        self.is_active = False
+        self.last_center_time = None
+        self.last_base_date = None
+        self._update_ui()
+    
+    def set_center_reference(self, center_utc_time, base_date):
+        """Establece el tiempo de referencia del centro actual."""
+        self.last_center_time = center_utc_time
+        self.last_base_date = base_date
+    
+    def calculate_new_start_time(self, new_duration):
+        """Calcula la nueva hora de inicio para mantener el centro fijo."""
+        if not self.is_active or not self.last_center_time or not self.last_base_date:
+            return None
+        
+        # El nuevo inicio debe ser: centro - (nueva_duración / 2)
+        half_duration = new_duration / 2.0
+        new_start_utc = self.last_center_time - half_duration
+        new_start_dt = new_start_utc.datetime
+        
+        # Extraer solo la parte de tiempo (sin fecha)
+        new_start_time = dt_time(
+            new_start_dt.hour, 
+            new_start_dt.minute, 
+            new_start_dt.second, 
+            new_start_dt.microsecond
+        )
+        
+        return new_start_time
+    
+    def _update_ui(self):
+        """Actualiza la interfaz según el estado del modo."""
+        if self.is_active:
+            self.button.config(relief=tk.SUNKEN, text='Mantener centro: ON')
+        else:
+            self.button.config(relief=tk.RAISED, text='Mantener centro: OFF')
+
+
 class EventExtractorGUI:
     """Clase principal de la interfaz gráfica."""
     
@@ -250,6 +305,9 @@ class EventExtractorGUI:
         
         tk.Button(frame, text="Previsualizar", command=self._preview).pack(side='left', padx=10)
         
+        self.btn_keep_center = tk.Button(frame, text="Mantener centro: OFF", command=self._toggle_keep_center)
+        self.btn_keep_center.pack(side='left', padx=5)
+        
         self.btn_centrar = tk.Button(frame, text="Centrar: OFF", command=self._toggle_centering)
         self.btn_centrar.pack(side='left', padx=10)
         
@@ -271,10 +329,15 @@ class EventExtractorGUI:
     def _setup_callbacks(self):
         """Configura los callbacks y modos especiales."""
         self.centering_mode = CenteringMode(self.btn_centrar, self.lbl_pos)
+        self.keep_center_mode = KeepCenterMode(self.btn_keep_center, self.time_handler)
+        
         self.plot_manager.set_callbacks(
             click_callback=self._on_plot_click,
             mouse_move_callback=self._on_mouse_move
         )
+        
+        # Callback para cambios en duración
+        self.spin_duracion.config(command=self._on_duration_change)
     
     def _open_file(self):
         """Abre y procesa un archivo miniSEED."""
@@ -315,6 +378,9 @@ class EventExtractorGUI:
         
         self.entry_shift.delete(0, tk.END)
         self.entry_shift.insert(0, "0")
+        
+        # Desactivar modos especiales al cargar nuevo archivo
+        self.keep_center_mode.deactivate()
     
     def _get_preview_parameters(self):
         """Obtiene y valida los parámetros para la previsualización."""
@@ -347,6 +413,13 @@ class EventExtractorGUI:
         try:
             params = self._get_preview_parameters()
             
+            # Si está activo "Mantener centro", usar la hora recalculada
+            if self.keep_center_mode.is_active:
+                new_start_time = self.keep_center_mode.calculate_new_start_time(params['duration'])
+                if new_start_time:
+                    params['hora_dt'] = new_start_time
+                    params['shift_seconds'] = 0  # Sin desplazamiento
+            
             # Crear tiempo UTC con desplazamiento
             start_utc, start_dt = self.time_handler.create_utc_datetime(
                 self.data_processor.file_starttime.date,
@@ -359,9 +432,20 @@ class EventExtractorGUI:
                 start_utc, params['duration'], params['channel']
             )
             
+            # Calcular el centro actual
+            center_utc = start_utc + (params['duration'] / 2.0)
+            
             # Actualizar interfaz
             self._update_time_display(start_dt)
             self._update_center_display(start_utc, params['duration'])
+            
+            # SIEMPRE actualizar la referencia del centro después de cada previsualización
+            # Esto asegura que "Mantener centro" use siempre el centro más reciente
+            self.keep_center_mode.set_center_reference(
+                center_utc, 
+                self.data_processor.file_starttime.date
+            )
+            
             self.centering_mode.deactivate()
             
             # Crear gráfico
@@ -391,6 +475,34 @@ class EventExtractorGUI:
     def _toggle_centering(self):
         """Alterna el modo de centrado."""
         self.centering_mode.toggle()
+    
+    def _toggle_keep_center(self):
+        """Alterna el modo mantener centro."""
+        self.keep_center_mode.toggle()
+    
+    def _on_duration_change(self):
+        """Maneja cambios en la duración cuando está activo 'Mantener centro'."""
+        if not self.keep_center_mode.is_active:
+            return
+        
+        try:
+            new_duration = float(self.spin_duracion.get())
+            new_start_time = self.keep_center_mode.calculate_new_start_time(new_duration)
+            
+            if new_start_time:
+                # Actualizar el campo de hora inicio
+                time_str = self.time_handler.format_time_with_ms(
+                    datetime.combine(datetime.min.date(), new_start_time)
+                )
+                self.entry_hora.delete(0, tk.END)
+                self.entry_hora.insert(0, time_str)
+                
+                # Resetear desplazamiento
+                self.entry_shift.delete(0, tk.END)
+                self.entry_shift.insert(0, "0")
+                
+        except ValueError:
+            pass  # Ignorar valores inválidos durante la escritura
     
     def _on_plot_click(self, event):
         """Maneja clics en el gráfico para centrado."""
