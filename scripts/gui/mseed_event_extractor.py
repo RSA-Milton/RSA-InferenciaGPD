@@ -234,6 +234,7 @@ class EventExtractorGUI:
         self._init_components()
         self._create_gui()
         self._setup_callbacks()
+        self.last_segment = None  # NUEVO: almacenará el último segmento previsualizado
     
     def _setup_environment(self):
         """Configura variables de entorno."""
@@ -304,6 +305,8 @@ class EventExtractorGUI:
         frame.pack(pady=10)
         
         tk.Button(frame, text="Previsualizar", command=self._preview).pack(side='left', padx=10)
+        
+        tk.Button(frame, text="Guardar mseed", command=self._save_mseed).pack(side='left', padx=10)  # NUEVO
         
         self.btn_keep_center = tk.Button(frame, text="Mantener centro: OFF", command=self._toggle_keep_center)
         self.btn_keep_center.pack(side='left', padx=5)
@@ -431,6 +434,8 @@ class EventExtractorGUI:
             segment = self.data_processor.extract_segment(
                 start_utc, params['duration'], params['channel']
             )
+
+            self.last_segment = segment  # NUEVO: guardar el ultimo segmento previsualizado
             
             # Calcular el centro actual
             center_utc = start_utc + (params['duration'] / 2.0)
@@ -535,6 +540,26 @@ class EventExtractorGUI:
             self.lbl_pos.config(text=f"Δ: {delta:+.2f} s")
         else:
             self.lbl_pos.config(text=f"Posición: {event.xdata:.2f} s")
+    
+    def _save_mseed(self):  # NUEVO
+        """Guarda el último segmento previsualizado en formato MiniSEED."""
+        if not self.last_segment:
+            messagebox.showwarning("Aviso", "Primero previsualiza un segmento.")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            title="Guardar segmento mseed",
+            defaultextension=".mseed",
+            filetypes=[("MiniSEED", "*.mseed")]
+        )
+        if not filename:
+            return
+        
+        try:
+            self.last_segment.write(filename, format="MSEED")
+            messagebox.showinfo("Éxito", f"Segmento guardado en:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar: {e}")
     
     def _on_close(self):
         """Maneja el cierre de la aplicación."""
