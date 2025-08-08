@@ -13,6 +13,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class TimeHandler:
@@ -86,6 +87,17 @@ class DataProcessor:
         if not segment:
             raise Exception("No hay datos en el intervalo especificado")
         
+        return segment
+
+    def extract_segment_multi(self, start_time, duration):
+        """Devuelve un Stream con TODOS los canales en la ventana [start_time, start_time+duration]."""
+        end_time = start_time + duration
+        # Recorte de todo el stream, sin select(channel=...)
+        segment = self.stream.slice(starttime=start_time, endtime=end_time)
+        # Asegurar recorte a frontera de muestra
+        segment.trim(starttime=start_time, endtime=end_time, nearest_sample=True)
+        if not segment:
+                raise Exception("No hay datos en el intervalo especificado")
         return segment
 
 
@@ -235,6 +247,7 @@ class EventExtractorGUI:
         self._create_gui()
         self._setup_callbacks()
         self.last_segment = None  # NUEVO: almacenará el último segmento previsualizado
+        self._last_window = None  # (start_utc, duration)
     
     def _setup_environment(self):
         """Configura variables de entorno."""
@@ -457,6 +470,9 @@ class EventExtractorGUI:
             self.plot_manager.create_plot(
                 segment, params['duration'], self.entry_archivo.get()
             )
+
+            # Guardar la ultima ventana usada para previsualizacion
+            self._last_window = (start_utc, params['duration'])
             
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -541,25 +557,77 @@ class EventExtractorGUI:
         else:
             self.lbl_pos.config(text=f"Posición: {event.xdata:.2f} s")
     
-    def _save_mseed(self):  # NUEVO
-        """Guarda el último segmento previsualizado en formato MiniSEED."""
-        if not self.last_segment:
-            messagebox.showwarning("Aviso", "Primero previsualiza un segmento.")
-            return
+    def _save_mseed(self):
+        """
+        Guarda el evento en miniSEED incluyendo **todos los canales** presentes en la ventana
+        seleccionada (no solo el canal previsualizado).
+        """
         
+        # Comprobaciones basicas
+        if self.data_processor is None or self.data_processor.stream is None:
+            messagebox.showerror("Error", "No hay archivo cargado.")
+            return
+
+        # Elegir ruta de salida
         filename = filedialog.asksaveasfilename(
-            title="Guardar segmento mseed",
+            title="Guardar evento miniSEED",
             defaultextension=".mseed",
-            filetypes=[("MiniSEED", "*.mseed")]
+            filetypes=[("miniSEED", ".mseed"), ("Todos", ".*")],
         )
         if not filename:
             return
-        
+
         try:
-            self.last_segment.write(filename, format="MSEED")
-            messagebox.showinfo("Éxito", f"Segmento guardado en:\n{filename}")
+            # 1) Determinar la ventana a guardar (preferir la usada en previsualizacion)
+            window = getattr(self, "_last_window", None)
+            if window is None:
+                # Fallback: reconstruir desde los widgets si no hubo previsualizacion
+                params = self._gather_params()  # Debe existir en tu clase
+                start_utc, _ = self.time_handler.create_utc_datetime(
+                    self.data_processor.file_starttime.date,
+                    params['hora_dt'],
+                    params['shift_seconds']
+                )
+                duration = params['duration']
+            else:
+                start_utc, duration = window
+
+            # 2) Extraer **todos** los canales en esa ventana (nuevo metodo en DataProcessor)
+            segmento_a_guardar = self.data_processor.extract_segment_multi(start_utc, duration)  # NUEVO
+            if len(segmento_a_guardar) == 0:
+                messagebox.showerror("Error", "No hay datos en la ventana seleccionada para ningun canal.")
+                return
+
+            # (Opcional) Avisar si faltan canales esperados ENT/ENR/ENV
+            # esperados = {"ENT", "ENR", "ENV"}
+            # presentes = {tr.stats.channel for tr in segmento_a_guardar}
+            # faltan = sorted(esperados - presentes)
+            # if faltan:
+            #     messagebox.showwarning("Aviso", "Se guardo el evento, pero faltaron canales: " + ", ".join(faltan))
+
+            # 3) Elegir codificacion segun dtype (robusto)
+            # Detectar si algun trace es float; si mezcla tipos, homogenizar a float32
+            any_float = any(np.issubdtype(tr.data.dtype, np.floating) for tr in segmento_a_guardar)
+            if any_float:
+                for tr in segmento_a_guardar:
+                    tr.data = tr.data.astype(np.float32, copy=False)
+                encoding = 4   # FLOAT32
+            else:
+                # Enteros -> STEIM2 asegurando int32
+                for tr in segmento_a_guardar:
+                    if tr.data.dtype != np.int32:
+                        tr.data = tr.data.astype(np.int32, copy=False)
+                encoding = 11  # STEIM2
+
+            # 4) Escribir archivo miniSEED con todos los trazos
+            segmento_a_guardar.write(filename, format="MSEED", encoding=encoding, reclen=4096)
+            
+            messagebox.showinfo("Exito", f"Segmento guardado en:\n{os.path.abspath(filename)}")
+
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo guardar: {e}")
+    
+    
     
     def _on_close(self):
         """Maneja el cierre de la aplicación."""
