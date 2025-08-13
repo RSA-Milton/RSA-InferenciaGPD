@@ -1,0 +1,19 @@
+# Copiar este archivo en cada directorio que se desea sincronizar y editar su contenido #
+
+# Carpeta en el remoto
+REMOTE=gdrive
+
+# Ruta dentro de Drive
+REMOTE_PATH=Datos_mediciones/Acelerografos/DEV00  # Subcarpeta del proyecto
+
+# Carpeta local de respaldos
+LOCAL_BACKUP_ROOT=.sync_bk
+
+# Carpeta remota de respaldos (fuera de REMOTE_PATH)
+REMOTE_BACKUP_ROOT=Respaldos_Acelerografos/DEV00
+
+# Exclusiones adicionales
+EXCLUDES="--exclude=**/*.tmp --exclude=**/*.log"
+
+# Archivo de exclusiones estilo rclone
+EXCLUDES_FILE=.syncignore
