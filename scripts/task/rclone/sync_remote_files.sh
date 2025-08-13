@@ -40,16 +40,6 @@ Modos:
   --dry-run    Simula la operación sin copiar, borrar o mover ningún archivo.
   -v           Aumenta la verbosidad del log, mostrando más detalles sobre cada archivo que sería copiado, borrado o respaldado.
 
-Archivo .syncenv (en el directorio actual):
-  COMMAND=pull               # o push (obligatorio si no pasas modo por CLI)
-  REMOTE=gdrive
-  REMOTE_PATH=Ruta/en/Drive
-  LOCAL_BACKUP_ROOT=.sync_bk
-  REMOTE_BACKUP_ROOT=Respaldos/Carpeta
-  EXCLUDES="--exclude=**/*.tmp --exclude=**/*.log --exclude=/\.syncenv --exclude=/.sync_bk/**"
-  EXCLUDES_FILE=.syncignore          # opcional
-  COMMON_EXTRA="--fast-list"         # opcional
-
 Ejemplos:
   sync_remote_files.sh --dry-run -v
   sync_remote_files.sh pull -v
@@ -112,6 +102,13 @@ do_push() {
 
 resolve_mode() {
   local cli_mode="${1:-}"
+
+  # Mostrar ayuda si el primer argumento es help/-h/--help
+  if [[ "${cli_mode}" == "help" || "${cli_mode}" == "-h" || "${cli_mode}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
   if [[ "${cli_mode:-}" == "pull" || "${cli_mode:-}" == "push" ]]; then
     MODE="${cli_mode}"
     shift || true
@@ -139,6 +136,7 @@ resolve_mode() {
   MODE="${COMMAND}"
   REMAINING_ARGS=("$@")
 }
+
 
 main() {
   need_rclone
