@@ -309,8 +309,35 @@ class EventExtractorGUI:
         self.entry_shift.grid(row=1, column=1, padx=5, sticky='w')
         
         tk.Label(frame, text="Canal:").grid(row=1, column=2, padx=5, sticky='e')
-        self.channel_var = tk.StringVar(value="ENT")
-        tk.OptionMenu(frame, self.channel_var, "ENT", "ENR", "ENV").grid(row=1, column=3, padx=5, sticky='w')
+        
+        # Inicializar con valor por defecto hasta que se cargue un archivo
+        self.channel_var = tk.StringVar(value="--")
+        self.channel_menu = tk.OptionMenu(frame, self.channel_var, "--")
+        self.channel_menu.grid(row=1, column=3, padx=5, sticky='w')
+
+    def _update_channel_options(self):
+        """Actualiza las opciones de canal basándose en el archivo cargado."""
+        if not self.data_processor.stream:
+            return
+        
+        # Obtener todos los canales únicos del stream
+        channels = []
+        for trace in self.data_processor.stream:
+            channel_name = trace.stats.channel
+            if channel_name not in channels:
+                channels.append(channel_name)
+        
+        # Actualizar el menú de opciones
+        menu = self.channel_menu['menu']
+        menu.delete(0, 'end')
+        
+        # Agregar las nuevas opciones
+        for channel in channels:
+            menu.add_command(label=channel, command=tk._setit(self.channel_var, channel))
+        
+        # Establecer el primer canal como predeterminado
+        if channels:
+            self.channel_var.set(channels[0])
     
     def _create_actions_frame(self):
         """Crea el frame para acciones y controles."""
@@ -370,6 +397,7 @@ class EventExtractorGUI:
             self.data_processor.load_file(filename)
             self._update_file_info()
             self._reset_parameters()
+            self._update_channel_options()
             
             self.entry_archivo.delete(0, tk.END)
             self.entry_archivo.insert(0, filename)
